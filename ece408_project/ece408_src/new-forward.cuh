@@ -30,28 +30,42 @@ __global__ void forward_kernel(float *y, const float *x, const float *k, const i
 #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 #define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
-     int W_grid = ceil(W_out / (1.0 * TILE_WIDTH));
+    int W_grid = ceil(W_out / (1.0 * TILE_WIDTH));
      
 
-    int n = blockIdx.x;  
-    int m = blockIdx.y;
+    int n = blockIdx.x * 2;
+    // int n = blockIdx.x;  
+    int m = blockIdx.y * 2;
+    // int m = blockIdx.y;
     
     int h = ((blockIdx.z / W_grid) * TILE_WIDTH) + threadIdx.y;
     int w = ((blockIdx.z % W_grid) * TILE_WIDTH) + threadIdx.x;
     
     float acc = 0.0;
+    float acc2 = 0.0;
+    float acc3 = 0.0;
+    float acc4 = 0.0;
 	
 	if (n < B && m < M && h < H_out && w < W_out){
-    
-    for( int c = 0; c < C; c++ ){
-        for( int p = 0; p < K; p++ ){
-            for( int q = 0; q < K; q++ ){
-                acc += x4d(n, c,  h + p, w + q) * k4d(m, c, p, q);
+
+        for( int c = 0; c < C; c++ ){
+            for( int p = 0; p < K; p++ ){
+                for( int q = 0; q < K; q++ ){
+                    acc += x4d(n, c,  h + p, w + q) * k4d(m, c, p, q);
+
+                    acc2 += x4d(n, c,  h + p, w + q) * k4d(m + 1, c, p, q);
+                    acc3 += x4d(n + 1, c,  h + p, w + q) * k4d(m + 1, c, p, q);
+                    acc4 += x4d(n + 1, c,  h + p, w + q) * k4d(m, c, p, q);
+
+                }
             }
         }
-    }
 
-    y4d(n, m, h, w) = acc;
+        y4d(n, m, h, w) = acc;
+
+        y4d(n, m+1, h, w) = acc2;
+        y4d(n+1, m+1, h, w) = acc3;
+        y4d(n+1, m, h, w) = acc4;
 
 	}
 
@@ -92,7 +106,8 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     // Set the kernel dimensions
     
-    dim3 gridDim(B, M, Z);
+    // dim3 gridDim(B, M, Z);
+    dim3 gridDim(ceil(B / 2.0), ceil(M / 2.0), Z);
     dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
 
     // Call the kernel
