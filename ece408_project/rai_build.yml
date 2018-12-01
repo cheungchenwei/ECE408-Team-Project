@@ -21,10 +21,10 @@ commands:
       #- /usr/bin/time python m2.1.py # execute code
       #- python m2.1.py 10000
       #- /usr/bin/time python m3.1.py # execute code
-    - python m3.1.py 10000
+    #- python m3.1.py 10000
     #- nvprof -o timeline.nvprof python m3.1.py 100
     #- nvprof --kernels "::forward:1" --analysis-metrics -o forward1_analysis.nvprof python m3.1.py 100
     #- nvprof --kernels "::forward:2" --analysis-metrics -o forward2_analysis.nvprof python m3.1.py 100
-      #- /usr/bin/time python m4.1.py # execute code
+    - python m4.1.py 10000 # execute code
       #- nvprof -f -o timeline.nvvp python m1.2.py # execute code
       #- nvprof -f --analysis-metrics -o analysis.nvvp python m1.2.py # execute code
