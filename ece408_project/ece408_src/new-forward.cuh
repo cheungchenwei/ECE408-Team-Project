@@ -145,6 +145,75 @@ __global__ void forward_kernel_unroll(float *y, const float *x, const float *k, 
 #undef k4d
 }
 
+__global__ void forward_kernel_shared(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
+{
+
+	const int H_out = H - K + 1;
+    const int W_out = W - K + 1;
+	int W_grid = ceil((W_out)/16.0);
+
+	// An example use of these macros:
+	// float a = y4d(0,0,0,0)
+	// y4d(0,0,0,0) = a
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+
+	int n, m, h, w, h0, w0, h_base, w_base;
+	int X_tile_width = TILE_WIDTH + K-1;
+	extern __shared__ float shared_mem[];
+	float* X_shared = &shared_mem[0];
+	float* W_shared = &shared_mem[X_tile_width * X_tile_width];
+	n = blockIdx.x;
+	m = blockIdx.y;
+	h0 = threadIdx.y;
+	w0 = threadIdx.x;
+	h_base = (blockIdx.z / W_grid) * TILE_WIDTH; // vertical base out data index for the block
+	w_base = (blockIdx.z % W_grid) * TILE_WIDTH; // horizontal base out data index for the block
+	h = h_base + h0;
+	w = w_base + w0;
+	float acc = 0.0;
+	for(int c = 0; c < C; c++) {	
+        // sum over all input channels
+		//load weights for W [m, c,..],
+		// h0 and w0 used as shorthand for threadIdx.x
+		// and threadIdx.y
+		if ((h0 < K) && (w0 < K)) {
+			W_shared[h0 * K + w0]= k4d(m, c, h0, w0);
+		}
+		__syncthreads();
+
+		// load tile from X[n, c,…] into shared memory
+		for (int i = h; i < h_base + X_tile_width; i += TILE_WIDTH) {
+			for (int j = w; j < w_base + X_tile_width; j += TILE_WIDTH) {
+				if (i < H && j < W) {
+					X_shared[(i - h_base) * X_tile_width + (j - w_base)] = x4d(n, c, i, j);
+				} else {
+					X_shared[(i - h_base) * X_tile_width + (j - w_base)] = 0;
+				}
+			}
+		}
+		__syncthreads();
+
+		for(int p = 0; p < K; p++) {
+			for(int q = 0; q < K; q++) {
+				if((h0 + p) < X_tile_width && (w0 + q) < X_tile_width) {
+					acc += X_shared[(h0 + p) * X_tile_width + (w0 + q)] * W_shared[p * K + q];
+				}
+			}
+		}
+		__syncthreads();
+	}
+
+	if (n < B && m < M && h < H_out && w < W_out) {
+		y4d(n, m, h, w) = acc;
+    }
+    
+	#undef y4d
+	#undef x4d
+	#undef k4d
+}
+
 /* 
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -172,6 +241,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     int W_grid = ceil(W_out / (1.0 * TILE_WIDTH));
     int H_grid = ceil(H_out / (1.0 * TILE_WIDTH));
     const int Z = H_grid * W_grid;
+    size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
 
     // Set the kernel dimensions
     
@@ -181,7 +251,8 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     // Call the kernel
     //forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
-    forward_kernel_unroll<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
+    //forward_kernel_unroll<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
+    forward_kernel_shared<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
