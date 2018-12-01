@@ -1,7 +1,7 @@
 
 #ifndef MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
-#define TILE_WIDTH 32
+#define TILE_WIDTH 16
 
 #include <mxnet/base.h>
 
@@ -322,8 +322,8 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     dim3 gridDim(B, M, Z);
     dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
 
-<<<<<<< HEAD
-    //
+
+    /* Optimization: Unroll + Weight matrix (kernel values) in constant memory
     if(C == 1){
         cudaMemcpyToSymbol(weight1, w.dptr_, M * C * K * K * sizeof(float));  
         // Call the kernel1
@@ -333,12 +333,11 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
         // Call the kernel2
         forward_kernel_unroll2<<<gridDim, blockDim>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     }
-=======
-    // Call the kernel
-    //forward_kernel<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
-    //forward_kernel_unroll<<<gridDim, blockDim>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
+    */
+
+    // Optimization: Shared Memory convolution
     forward_kernel_shared<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
->>>>>>> c8682aba4b3372a89adadbb1f25944bbc8e69eb2
+
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
