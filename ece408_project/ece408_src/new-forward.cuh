@@ -222,7 +222,7 @@ __global__ void forward_kernel_unroll2(float *y, const float *x, const float *k,
 
 __global__ void forward_kernel_shared(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
 {
-
+    #define TILE_WIDTH 16
 	const int H_out = H - K + 1;
     const int W_out = W - K + 1;
 	int W_grid = ceil((W_out)/16.0);
@@ -235,7 +235,7 @@ __global__ void forward_kernel_shared(float *y, const float *x, const float *k, 
 	#define k4d(i3, i2, i1, i0) k[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
 	int n, m, h, w, h0, w0, h_base, w_base;
-	int X_tile_width = TILE_WIDTH + K-1;
+	int X_tile_width = TILE_WIDTH + K - 1;
 	extern __shared__ float shared_mem[];
 	float* X_shared = &shared_mem[0];
 	float* W_shared = &shared_mem[X_tile_width * X_tile_width];
