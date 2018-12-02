@@ -249,18 +249,19 @@ __global__ void forward_kernel_shared2(float *y, const float *x, const float *k,
 	w_base = (blockIdx.z % W_grid) * TILE_WIDTH; // horizontal base out data index for the block
 	h = h_base + h0;
 	w = w_base + w0;
-	float acc = 0.0;
+    float acc = 0.0;
+    /*
+            Optimization: Shared Memory convolution
+            Reason: For this optimization, we load tiles from X[n, c,…] into shared memory which could be reused for multiple times when do the convolution with W.
+            Thus, the kernel could perform more efficient since it reduces the time that costs to read from global memory and write back to global memory. 
+    */
 	for(int c = 0; c < C; c++) {	
-        // sum over all input channels
-		//load weights for W [m, c,..],
-		// h0 and w0 used as shorthand for threadIdx.x
-		// and threadIdx.y
+
 		if ((h0 < K) && (w0 < K)) {
 			W_shared[h0 * K + w0]= k4d(m, c, h0, w0);
 		}
 		__syncthreads();
 
-		// load tile from X[n, c,…] into shared memory
 		for (int i = h; i < h_base + X_tile_width; i += TILE_WIDTH) {
 			for (int j = w; j < w_base + X_tile_width; j += TILE_WIDTH) {
 				if (i < H && j < W) {
