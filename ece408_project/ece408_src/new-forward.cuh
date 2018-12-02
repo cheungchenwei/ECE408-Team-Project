@@ -23,18 +23,18 @@ __global__ void forward_kernel_unroll1(float *y, const float *x, const float *k,
     We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
     */
 
-    const int H_out = H - K + 1;
-    const int W_out = W - K + 1;
+    const int H_out = 66;
+    const int W_out = 66;
 
 // An example use of these macros:
 // float a = y4d(0,0,0,0)
 // y4d(0,0,0,0) = a
-#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
-#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-#define k4d(i3, i2, i1, i0) weight1[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	#define k4d(i3, i2, i1, i0) weight1[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
 
-    int W_grid = ceil(W_out / (1.0 * TILE_WIDTH));
+    int W_grid = 3;
      
 
     //int n = blockIdx.x * 2;
@@ -94,18 +94,18 @@ __global__ void forward_kernel_unroll2(float *y, const float *x, const float *k,
     We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
     */
 
-    const int H_out = H - K + 1;
-    const int W_out = W - K + 1;
+    const int H_out = 27;
+    const int W_out = 27;
 
-// An example use of these macros:
-// float a = y4d(0,0,0,0)
-// y4d(0,0,0,0) = a
-#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
-#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-#define k4d(i3, i2, i1, i0) weight2[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+	// An example use of these macros:
+	// float a = y4d(0,0,0,0)
+	// y4d(0,0,0,0) = a
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	#define k4d(i3, i2, i1, i0) weight2[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
 
 
-    int W_grid = ceil(W_out / (1.0 * TILE_WIDTH));
+    int W_grid = 1;
      
 
     //int n = blockIdx.x * 2;
@@ -315,40 +315,50 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     const int W = x.shape_[3];
     const int K = w.shape_[3];
     const int H_out = H - K + 1;
-    const int W_out = W - K + 1;
+    const int W_out = H - K + 1;
     int W_grid = ceil(W_out / (1.0 * TILE_WIDTH));
     int H_grid = ceil(H_out / (1.0 * TILE_WIDTH));
     const int Z = H_grid * W_grid;
-    size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
+    //size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
 
     // Set the kernel dimensions
     dim3 gridDim(B, M, Z);
     dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
 
-
     // Optimization: Unroll + Weight matrix (kernel values) in constant memory
     if(C == 1){
-        cudaMemcpyToSymbol(weight1, w.dptr_, M * C * K * K * sizeof(float));  
+        // kernel for layer 1, which has smaller size
+        // put weight matrix in constant memory
+        cudaMemcpyToSymbol(weight1, w.dptr_, 588 * sizeof(float));  
         // Call the kernel1
         forward_kernel_unroll1<<<gridDim, blockDim>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     } else{
-        cudaMemcpyToSymbol(weight2, w.dptr_, M * C * K * K * sizeof(float));
+        // kernel for layer 2, which has greater size
+        // put weight matrix in constant memory
+        cudaMemcpyToSymbol(weight2, w.dptr_, 14112 * sizeof(float));
         // Call the kernel2
         forward_kernel_unroll2<<<gridDim, blockDim>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     }
     
+    
 
     /* Optimization: Shared Memory convolution
     if(C == 1){
-        cudaMemcpyToSymbol(weight1, w.dptr_, M * C * K * K * sizeof(float));  
+        // kernel for layer 1, which has smaller size
+        // put weight matrix in constant memory
+        cudaMemcpyToSymbol(weight1, w.dptr_, 588 * sizeof(float));  
         // Call the kernel1
         forward_kernel_shared1<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
     } else{
-        cudaMemcpyToSymbol(weight2, w.dptr_, M * C * K * K * sizeof(float));
+        // kernel for layer 2, which has larger size
+        // put weight matrix in constant memory
+        cudaMemcpyToSymbol(weight2, w.dptr_, 14112 * sizeof(float));
         // Call the kernel2
         forward_kernel_shared2<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
     }
     */
+    
+    
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
