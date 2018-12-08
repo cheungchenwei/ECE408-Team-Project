@@ -292,6 +292,57 @@ __global__ void forward_kernel_shared2(float *y, const float *x, const float *k,
 	#undef k4d
 }
 
+
+__global__ void forward_kernel_atomic(float *y, const float *x, const float *k, const int B, const int M, const int C, const int H, const int W, const int K)
+{
+    const int H_out = 27;
+    const int W_out = 27;
+
+	// An example use of these macros:
+	// float a = y4d(0,0,0,0)
+	// y4d(0,0,0,0) = a
+	#define y4d(i3, i2, i1, i0) y[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
+	#define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+	#define k4d(i3, i2, i1, i0) weight2[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
+
+
+    int W_grid = 1;
+    int H_grid = 1;
+    
+    int n = blockIdx.x;  
+    int m = blockIdx.y;
+    
+    int h = ((blockIdx.z / C / W_grid) * TILE_WIDTH) + threadIdx.y;
+    int w = ((blockIdx.z / C % W_grid) * TILE_WIDTH) + threadIdx.x;
+    int c = (blockIdx.z / (H_grid*W_grid));
+    /*
+        Optimization: 
+        Op Time:0.112061 (Only for C > 1)
+        Reason: Although we treat C in parallel, this optimization is slower due to atomic operation works as serial functions.
+        Therefore, atomic operation is better for communication betweern threads in different blocks, but not good for our performance in this project.
+    */
+
+    float acc = 0.0;
+
+	if (n < B && m < M && h < H_out && w < W_out){
+            
+        #pragma unroll 7
+        for( int p = 0; p < K; p++){
+            #pragma unroll 7
+            for( int q = 0; q < K; q++){
+                acc += x4d(n, c,  h + p, w + q) * k4d(m, c, p, q);
+                
+            }
+        }
+        atomicAdd(&y4d(n, m, h, w),acc);
+        //y4d(n, m, h, w) = acc;
+	}
+
+#undef y4d
+#undef x4d
+#undef k4d
+}
+
 /* 
    This function is called by new-inl.h
    Any code you write should be executed by this function.
@@ -358,7 +409,26 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     }
     */
     
+    /* Optimization: Atomic reduction
+    // we need to add C into gridDim, then every thread is able to use atomic function. 
+    dim3 gridDimAtomic(B, M, Z * C);;
+    dim3 blockDimAtomic(TILE_WIDTH, TILE_WIDTH, 1);
+    if(C == 1){
+        // kernel for layer 1, which has smaller size
+        // put weight matrix in constant memory
+        cudaMemcpyToSymbol(weight1, w.dptr_, 588 * sizeof(float));  
+        // Call the kernel1
+        forward_kernel_shared1<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
+    } else{
+        // kernel for layer 2, which has larger size
+        // put weight matrix in constant memory
+
+        cudaMemcpyToSymbol(weight2, w.dptr_, 14112 * sizeof(float));
+        // Call the kernel2
+        forward_kernel_atomic<<<gridDimAtomic, blockDimAtomic>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     
+    }
+    */
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
