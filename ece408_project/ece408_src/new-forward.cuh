@@ -3,6 +3,7 @@
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define TILE_WIDTH 32
 #define TILEWIDTH 16
+#define NUM_THREADS 1024
 
 #include <mxnet/base.h>
 
@@ -459,7 +460,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     }
     */
     
-    // Optimization: Atomic reduction
+    /* Optimization: Atomic reduction
     // we need to add C into gridDim, then every thread is able to use atomic function. 
     dim3 gridDimAtomic(B, M, Z * C);;
     dim3 blockDimAtomic(TILE_WIDTH, TILE_WIDTH, 1);
@@ -478,8 +479,23 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
         forward_kernel_atomic<<<gridDimAtomic, blockDimAtomic>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     
     }
-    
-     
+    */
+
+    // Optimization: Shared Memory Matrix Multiply
+    int W_unroll = H_out * W_out;
+	int H_unroll = C * K * K;
+	float* X_unrolled;
+    cudaMalloc((void **) &X_unrolled, W_unroll * H_unroll * sizeof(float));
+    //TILEWIDTH = 16;
+    //NUM_THREADS = 1024;
+	dim3 dimBlock(TILEWIDTH, TILEWIDTH, 1);
+	dim3 dimGrid(ceil((1.0 * W_unroll)/TILEWIDTH), ceil((1.0 * M)/TILEWIDTH), 1);
+	int num_blocks = ceil((1.0 * C * H_out * W_out) / NUM_THREADS);
+	for (int b = 0; b < B; b++) {
+		float* output = &y.dptr_[b * M * H_out * W_out];
+        sharedMatrixMultiply<<<dimGrid, dimBlock>>>(w.dptr_, X_unrolled, output, M, H_unroll, H_unroll, W_unroll, M, W_unroll);
+    }
+
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
