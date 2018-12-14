@@ -343,6 +343,53 @@ __global__ void forward_kernel_atomic(float *y, const float *x, const float *k, 
 #undef k4d
 }
 
+__global__ void sharedMatrixMultiply(float *A, float *B, float *C,
+    int numARows, int numAColumns,
+    int numBRows, int numBColumns,
+    int numCRows, int numCColumns) {
+
+    int TILEWIDTH = 16;
+    __shared__ float tileA[TILEWIDTH][TILEWIDTH];
+    __shared__ float tileB[TILEWIDTH][TILEWIDTH];
+
+    int col = threadIdx.x + blockIdx.x * TILEWIDTH;
+    int row = threadIdx.y + blockIdx.y * TILEWIDTH;
+
+    /*
+            Optimization: Shared Memory Matrix Multiply
+            Reason: For this optimization, we optimized matrix multiply using shared memory, which could increase re-use and avoid thread divergence.
+            Besides, in the matrix multiply, we used coalescing techniques, which can more effectively move data from the global memory into shared memories and registers, allowing the DRAMs to supply data at high rate.
+            Thus, the optimization could allow CUDA device to utilize the global memory bandwidth more efficiently.
+    */
+
+    float val = 0;
+
+    for(int i = 0; i < ceil(1.0 * numAColumns / TILEWIDTH); i++) {
+        if(row < numARows && (i * TILEWIDTH + threadIdx.x) < numAColumns) {
+            tileA[threadIdx.y][threadIdx.x] = A[row * numAColumns + (i * TILEWIDTH + threadIdx.x)];
+        } else {
+            tileA[threadIdx.y][threadIdx.x] = 0;
+        }
+
+        if(col < numBColumns && (i * TILEWIDTH + threadIdx.y) < numBRows) {
+            tileB[threadIdx.y][threadIdx.x] = B[(i * TILEWIDTH + threadIdx.y) * numBColumns + col];
+        } else {
+            tileB[threadIdx.y][threadIdx.x] = 0;
+        }
+        __syncthreads();
+
+        for(int j = 0; j < TILEWIDTH; j++) {
+            val += tileA[threadIdx.y][j] * tileB[j][threadIdx.x];
+        }
+
+        __syncthreads();
+    }
+
+    if(row < numCRows && col < numCColumns) {
+        C[row * numCColumns + col] = val;
+    }
+}
+
 /* 
    This function is called by new-inl.h
    Any code you write should be executed by this function.
