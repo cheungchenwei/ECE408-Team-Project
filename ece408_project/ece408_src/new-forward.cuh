@@ -2,6 +2,7 @@
 #ifndef MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 #define TILE_WIDTH 32
+#define TILEWIDTH 16
 
 #include <mxnet/base.h>
 
@@ -130,7 +131,8 @@ __global__ void forward_kernel_unroll2(float *y, const float *x, const float *k,
             For example, "for(int i = 0; i < 2; i++) b[i] += 1" is slower than "b[0] += 1; b[1] += 1;". This is because in 
             the former version, variable i increases 2 times and assign to b 2 times, whereas the latter version only increase i by 2.
             */
-            
+
+        #pragma unroll 12
         for( int c = 0; c < C; c++){
             #pragma unroll 7
             for( int p = 0; p < K; p++){
@@ -348,7 +350,7 @@ __global__ void sharedMatrixMultiply(float *A, float *B, float *C,
     int numBRows, int numBColumns,
     int numCRows, int numCColumns) {
 
-    int TILEWIDTH = 16;
+    //int TILEWIDTH = 16;
     __shared__ float tileA[TILEWIDTH][TILEWIDTH];
     __shared__ float tileB[TILEWIDTH][TILEWIDTH];
 
@@ -418,11 +420,13 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     int H_grid = ceil(H_out / (1.0 * TILE_WIDTH));
     const int Z = H_grid * W_grid;
     //size_t shared_size = sizeof(float) * ((TILE_WIDTH + K-1) * (TILE_WIDTH + K-1) + K * K);
+    //printf("B: %d\nM: %d\nC: %d\nH: %d\nW: %d\nK: %d\n", B, M, C, H, W, K);
 
     // Set the kernel dimensions
     dim3 gridDim(B, M, Z);
     dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
 
+    /*
     // Optimization: Unroll + Weight matrix (kernel values) in constant memory
     if(C == 1){
         // kernel for layer 1, which has smaller size
@@ -437,8 +441,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
         // Call the kernel2
         forward_kernel_unroll2<<<gridDim, blockDim>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     }
-    
-    
+    */ 
 
     /* Optimization: Shared Memory convolution
     if(C == 1){
@@ -456,7 +459,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
     }
     */
     
-    /* Optimization: Atomic reduction
+    // Optimization: Atomic reduction
     // we need to add C into gridDim, then every thread is able to use atomic function. 
     dim3 gridDimAtomic(B, M, Z * C);;
     dim3 blockDimAtomic(TILE_WIDTH, TILE_WIDTH, 1);
@@ -465,7 +468,7 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
         // put weight matrix in constant memory
         cudaMemcpyToSymbol(weight1, w.dptr_, 588 * sizeof(float));  
         // Call the kernel1
-        forward_kernel_shared1<<<gridDim, blockDim, shared_size>>>(y.dptr_,x.dptr_,w.dptr_, B, M, C, H, W, K);
+        forward_kernel_unroll1<<<gridDim, blockDim>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     } else{
         // kernel for layer 2, which has larger size
         // put weight matrix in constant memory
@@ -475,8 +478,8 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
         forward_kernel_atomic<<<gridDimAtomic, blockDimAtomic>>>(y.dptr_, x.dptr_, w.dptr_, B, M, C, H, W, K);
     
     }
-    */
-
+    
+     
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
