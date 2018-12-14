@@ -346,17 +346,27 @@ __global__ void forward_kernel_atomic(float *y, const float *x, const float *k, 
 #undef k4d
 }
 
-__global__ void sharedMatrixMultiply(float *A, float *B, float *C,
-    int numARows, int numAColumns,
-    int numBRows, int numBColumns,
-    int numCRows, int numCColumns) {
+__global__ void sharedMatrixMultiply(float *x, float *y, const float *k, const int B, const int M, const int C, const int H, const int W, const int K, int W_grid) {
 
-    //int TILEWIDTH = 16;
-    __shared__ float tileA[TILEWIDTH][TILEWIDTH];
-    __shared__ float tileB[TILEWIDTH][TILEWIDTH];
+    #define x4d(i3, i2, i1, i0) x[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
 
-    int col = threadIdx.x + blockIdx.x * TILEWIDTH;
-    int row = threadIdx.y + blockIdx.y * TILEWIDTH;
+    const int H_out = H - K + 1;
+    const int W_out = W - K + 1;
+
+    int b = blockIdx.z;
+    int numARows = M;
+    int numAColumns = C * K * K;
+    int numBRows = C * K * K;
+    int numBColumns = H_out * W_out;
+    int numCRows = M;
+    int numCColumns = numBColumns;
+    int width = C * K * K;
+
+    __shared__ float tileA[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float tileB[TILE_WIDTH][TILE_WIDTH];
+
+    int col = threadIdx.x + blockIdx.x * TILE_WIDTH;
+    int row = threadIdx.y + blockIdx.y * TILE_WIDTH;
 
     /*
             Optimization: Shared Memory Matrix Multiply
@@ -366,31 +376,40 @@ __global__ void sharedMatrixMultiply(float *A, float *B, float *C,
     */
 
     float val = 0;
+    int x_c, x_h, x_w, x_p, x_q, x_pq;
 
-    for(int i = 0; i < ceil(1.0 * numAColumns / TILEWIDTH); i++) {
-        if(row < numARows && (i * TILEWIDTH + threadIdx.x) < numAColumns) {
-            tileA[threadIdx.y][threadIdx.x] = A[row * numAColumns + (i * TILEWIDTH + threadIdx.x)];
+    for(int tile = 0; tile < (width + TILE_WIDTH - 1) / TILE_WIDTH; tile++) {
+        if(tile*TILE_WIDTH + threadIdx.x < width && row < numCRows) {
+            tileA[threadIdx.y][threadIdx.x] = k[row*numAColumns + tile*TILE_WIDTH+threadIdx.x];
         } else {
-            tileA[threadIdx.y][threadIdx.x] = 0;
+            tileA[threadIdx.y][threadIdx.x] = 0.0;
         }
 
-        if(col < numBColumns && (i * TILEWIDTH + threadIdx.y) < numBRows) {
-            tileB[threadIdx.y][threadIdx.x] = B[(i * TILEWIDTH + threadIdx.y) * numBColumns + col];
+        if(tile*TILE_WIDTH + threadIdx.y < width && col < numCColumns) {
+            x_c = (tile*TILE_WIDTH+threadIdx.y)/(K*K);
+            x_h = col/W_out;
+            x_w = col%W_out;
+            x_pq = (tile*TILE_WIDTH+threadIdx.y)%(K*K);
+            x_p = x_pq/K;
+            x_q = x_pq%K;
+            tileB[threadIdx.y][threadIdx.x] = x4d(b, x_c, x_h + x_p, x_w + x_q);
         } else {
-            tileB[threadIdx.y][threadIdx.x] = 0;
+            tileB[threadIdx.y][threadIdx.x] = 0.0;
         }
         __syncthreads();
 
-        for(int j = 0; j < TILEWIDTH; j++) {
-            val += tileA[threadIdx.y][j] * tileB[j][threadIdx.x];
+        for(int i = 0; i < TILE_WIDTH; i++) {
+            val += (tileA[threadIdx.y][i] * tileB[i][threadIdx.x]);
         }
 
         __syncthreads();
+
     }
-
     if(row < numCRows && col < numCColumns) {
-        C[row * numCColumns + col] = val;
+        y[(b * M * H_out * W_out) + row*numCColumns + col] = val;
     }
+
+#undef x4d
 }
 
 /* 
@@ -483,19 +502,12 @@ void forward<gpu, float>(mshadow::Tensor<gpu, 4, float> &y, const mshadow::Tenso
 
     // Optimization: Shared Memory Matrix Multiply
     int W_unroll = H_out * W_out;
-	int H_unroll = C * K * K;
-	float* X_unrolled;
-    cudaMalloc((void **) &X_unrolled, W_unroll * H_unroll * sizeof(float));
-    //TILEWIDTH = 16;
-    //NUM_THREADS = 1024;
-	dim3 dimBlock(TILEWIDTH, TILEWIDTH, 1);
-	dim3 dimGrid(ceil((1.0 * W_unroll)/TILEWIDTH), ceil((1.0 * M)/TILEWIDTH), 1);
-	int num_blocks = ceil((1.0 * C * H_out * W_out) / NUM_THREADS);
-	for (int b = 0; b < B; b++) {
-		float* output = &y.dptr_[b * M * H_out * W_out];
-        sharedMatrixMultiply<<<dimGrid, dimBlock>>>(w.dptr_, X_unrolled, output, M, H_unroll, H_unroll, W_unroll, M, W_unroll);
-    }
+	dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+	dim3 dimGrid(ceil((1.0 * W_unroll)/TILE_WIDTH), ceil((1.0 * M)/TILE_WIDTH), B);
+	//int num_blocks = ceil((1.0 * C * H_out * W_out) / NUM_THREADS);
 
+    sharedMatrixMultiply<<<dimGrid, dimBlock>>>(x.dptr_, y.dptr_, w.dptr_, B, M, C, H, W, K, W_grid);
+    
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
 
